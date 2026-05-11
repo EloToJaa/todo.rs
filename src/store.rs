@@ -59,11 +59,13 @@ impl AppStore {
                 if !is_ics {
                     continue;
                 }
-                let mut todo = parse_ics_file(&path, &list.name)
+                let todo = parse_ics_file(&path, &list.name)
                     .with_context(|| format!("failed to parse {}", path.display()))?;
-                todo.path = path.clone();
-                let id = self.ensure_id(&list.name, &path, &todo.uid)?;
-                items.push((id, todo));
+                if let Some(mut todo) = todo {
+                    todo.path = path.clone();
+                    let id = self.ensure_id(&list.name, &path, &todo.uid)?;
+                    items.push((id, todo));
+                }
             }
         }
         items.sort_by(|a, b| a.0.cmp(&b.0));
@@ -84,7 +86,8 @@ impl AppStore {
         if !path.exists() {
             bail!("todo id {} points to missing file", id);
         }
-        let mut todo = parse_ics_file(&path, &list_name)?;
+        let mut todo = parse_ics_file(&path, &list_name)?
+            .ok_or_else(|| anyhow::anyhow!("todo id {} does not reference a VTODO file", id))?;
         todo.path = path;
         Ok(todo)
     }
@@ -185,12 +188,20 @@ impl AppStore {
     }
 }
 
-fn parse_ics_file(path: &Path, list_name: &str) -> Result<Todo> {
+fn parse_ics_file(path: &Path, list_name: &str) -> Result<Option<Todo>> {
     let raw = fs::read_to_string(path)?;
     let mut fields = HashMap::new();
     let mut other = Vec::new();
+    let mut in_vtodo = false;
     for line in unfold_lines(&raw) {
-        if line.starts_with("BEGIN:") || line.starts_with("END:") {
+        if line == "BEGIN:VTODO" {
+            in_vtodo = true;
+            continue;
+        }
+        if line == "END:VTODO" {
+            break;
+        }
+        if !in_vtodo {
             continue;
         }
         if let Some((key, value)) = split_ical_line(&line) {
@@ -203,6 +214,10 @@ fn parse_ics_file(path: &Path, list_name: &str) -> Result<Todo> {
                 _ => other.push(line),
             }
         }
+    }
+
+    if fields.is_empty() {
+        return Ok(None);
     }
 
     let uid = fields
@@ -228,7 +243,7 @@ fn parse_ics_file(path: &Path, list_name: &str) -> Result<Todo> {
         .map(|value| value.split(',').map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect())
         .unwrap_or_default();
 
-    Ok(Todo {
+    Ok(Some(Todo {
         uid,
         summary,
         description,
@@ -242,7 +257,7 @@ fn parse_ics_file(path: &Path, list_name: &str) -> Result<Todo> {
         list_name: list_name.to_string(),
         path: path.to_path_buf(),
         raw_other: other,
-    })
+    }))
 }
 
 fn write_ics_file(path: &Path, todo: &Todo) -> Result<()> {
@@ -414,5 +429,36 @@ mod tests {
         let copied = store.todo_by_id(copied_id).expect("copied todo");
         assert_ne!(copied.uid, original_uid);
         assert_eq!(copied.list_name.to_ascii_lowercase(), "work");
+    }
+
+    #[test]
+    fn ignores_vevent_files_when_listing_todos() {
+        let temp = tempdir().expect("temp dir");
+        let list_dir = temp.path().join("home");
+        fs::create_dir_all(&list_dir).expect("list dir");
+
+        let vevent = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:event-1\r\nSUMMARY:Meeting\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let vtodo = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:todo-1\r\nSUMMARY:Actual Task\r\nSTATUS:NEEDS-ACTION\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
+        fs::write(list_dir.join("event.ics"), vevent).expect("write event");
+        fs::write(list_dir.join("task.ics"), vtodo).expect("write todo");
+
+        let config = Config {
+            path_glob: format!("{}/*", temp.path().display()),
+            cache_path: temp.path().join("cache.sqlite3"),
+            default_list: None,
+            default_due_hours: 24,
+            date_format: "%Y-%m-%d".to_string(),
+            time_format: "%H:%M".to_string(),
+            dt_separator: " ".to_string(),
+            default_command: "list".to_string(),
+            color: "auto".to_string(),
+            humanize: false,
+            startable: false,
+        };
+
+        let mut store = AppStore::open(&config).expect("open store");
+        let todos = store.all_todos().expect("todos");
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].1.summary, "Actual Task");
     }
 }
