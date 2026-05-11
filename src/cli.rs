@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
+use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
 
 use anyhow::{bail, Result};
 use chrono::{Duration, Local};
@@ -44,6 +46,7 @@ enum Command {
     },
     Flush,
     Lists,
+    Repl,
     Path {
         id: i64,
     },
@@ -70,6 +73,8 @@ struct ListArgs {
     sort: Option<String>,
     #[arg(long, default_value_t = true)]
     reverse: bool,
+    #[arg(long)]
+    no_reverse: bool,
     #[arg(long)]
     due: Option<i64>,
     #[arg(short = 'c', long)]
@@ -126,6 +131,8 @@ struct EditArgs {
     clear_start: bool,
     #[arg(short = 'c', long)]
     category: Vec<String>,
+    #[arg(long)]
+    raw: bool,
 }
 
 impl Cli {
@@ -151,6 +158,7 @@ pub fn run(cli: Cli, config: &Config, app: &mut AppStore) -> Result<()> {
         Command::Delete { ids } => delete(ids, app, cli.porcelain),
         Command::Flush => flush(app, cli.porcelain),
         Command::Lists => list_lists(app, cli.porcelain),
+        Command::Repl => repl_loop(config, app, cli.porcelain),
         Command::Path { id } => path(id, app),
         Command::Move { id, list } => move_todo(id, &list, app, cli.porcelain),
         Command::Copy { id, list } => copy_todo(id, &list, app, cli.porcelain),
@@ -165,6 +173,7 @@ fn command_from_default(config: &Config) -> Command {
             grep: None,
             sort: None,
             reverse: true,
+            no_reverse: false,
             due: None,
             category: Vec::new(),
             priority: None,
@@ -180,6 +189,7 @@ fn command_from_default(config: &Config) -> Command {
         grep: None,
         sort: None,
         reverse: true,
+        no_reverse: false,
         due: None,
         category: Vec::new(),
         priority: None,
@@ -263,7 +273,8 @@ fn list(args: ListArgs, config: &Config, app: &mut AppStore, porcelain: bool) ->
         }
     }
 
-    sort_todos(&mut todos, args.sort.as_deref(), args.reverse);
+    let reverse = if args.no_reverse { false } else { args.reverse };
+    sort_todos(&mut todos, args.sort.as_deref(), reverse);
 
     if porcelain {
         let payload: Vec<PorcelainTodo> = todos
@@ -349,6 +360,24 @@ fn show(id: i64, config: &Config, app: &mut AppStore, porcelain: bool) -> Result
 
 fn edit(args: EditArgs, config: &Config, app: &mut AppStore, porcelain: bool) -> Result<()> {
     let mut todo = app.todo_by_id(args.id)?;
+    if args.raw {
+        edit_raw_file(&todo.path)?;
+        let updated = app.todo_by_id(args.id)?;
+        if porcelain {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&PorcelainTodo::from_parts(args.id, &updated))?
+            );
+            return Ok(());
+        }
+        output::print_detailed(
+            &updated,
+            &config.date_format,
+            &config.time_format,
+            &config.dt_separator,
+        );
+        return Ok(());
+    }
     if let Some(summary) = args.summary {
         todo.summary = summary;
     }
@@ -503,6 +532,66 @@ fn copy_todo(id: i64, list_name: &str, app: &mut AppStore, porcelain: bool) -> R
     }
     println!("copied {} to {} as {}", id, list.name, new_id);
     Ok(())
+}
+
+fn edit_raw_file(path: &Path) -> Result<()> {
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    let status = ProcessCommand::new(editor).arg(path).status()?;
+    if status.success() {
+        return Ok(());
+    }
+    bail!("editor exited with status: {}", status)
+}
+
+fn repl_loop(config: &Config, app: &mut AppStore, porcelain: bool) -> Result<()> {
+    use std::io::{self, Write};
+
+    let mut line = String::new();
+    loop {
+        print!("todo> ");
+        io::stdout().flush()?;
+        line.clear();
+        if io::stdin().read_line(&mut line)? == 0 {
+            return Ok(());
+        }
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+        if input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
+            return Ok(());
+        }
+        if input.eq_ignore_ascii_case("list") {
+            let args = ListArgs {
+                lists: Vec::new(),
+                location: None,
+                grep: None,
+                sort: None,
+                reverse: true,
+                no_reverse: false,
+                due: None,
+                category: Vec::new(),
+                priority: None,
+                start: None,
+                startable: false,
+                status: "NEEDS-ACTION,IN-PROCESS".to_string(),
+                all: false,
+            };
+            list(args, config, app, porcelain)?;
+            continue;
+        }
+        if input.eq_ignore_ascii_case("lists") {
+            list_lists(app, porcelain)?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("show ") {
+            if let Ok(id) = rest.trim().parse::<i64>() {
+                show(id, config, app, porcelain)?;
+                continue;
+            }
+        }
+        println!("unsupported repl command: {}", input);
+    }
 }
 
 fn parse_status_filter(raw: &str) -> Result<Vec<Status>> {
