@@ -47,6 +47,8 @@ enum Command {
     },
     Delete {
         ids: Vec<i64>,
+        #[arg(long)]
+        yes: bool,
     },
     Flush,
     Lists,
@@ -110,6 +112,8 @@ struct NewArgs {
     priority: Option<u8>,
     #[arg(short = 'c', long)]
     category: Vec<String>,
+    #[arg(short = 'r', long)]
+    read_description: bool,
 }
 
 #[derive(Debug, Args)]
@@ -135,6 +139,8 @@ struct EditArgs {
     clear_start: bool,
     #[arg(short = 'c', long)]
     category: Vec<String>,
+    #[arg(short = 'r', long)]
+    read_description: bool,
     #[arg(long)]
     raw: bool,
 }
@@ -161,7 +167,7 @@ pub fn run(cli: Cli, config: &Config, app: &mut AppStore) -> Result<()> {
         Command::Done { ids } => update_status(ids, Status::Completed, app, cli.porcelain),
         Command::Undo { ids } => update_status(ids, Status::NeedsAction, app, cli.porcelain),
         Command::Cancel { ids } => update_status(ids, Status::Cancelled, app, cli.porcelain),
-        Command::Delete { ids } => delete(ids, app, cli.porcelain),
+        Command::Delete { ids, yes } => delete(ids, yes, app, cli.porcelain),
         Command::Flush => flush(app, cli.porcelain),
         Command::Lists => list_lists(app, cli.porcelain),
         Command::Repl => repl_loop(config, app, cli.porcelain),
@@ -321,10 +327,16 @@ fn create(args: NewArgs, config: &Config, app: &mut AppStore) -> Result<()> {
         None
     };
 
+    let description = if args.read_description {
+        Some(read_stdin_all()?)
+    } else {
+        args.description
+    };
+
     let mut todo = Todo {
         uid: String::new(),
         summary: args.summary.join(" "),
-        description: args.description,
+        description,
         location: args.location,
         due,
         start: None,
@@ -390,6 +402,9 @@ fn edit(args: EditArgs, config: &Config, app: &mut AppStore, porcelain: bool) ->
     }
     if let Some(description) = args.description {
         todo.description = Some(description);
+    }
+    if args.read_description {
+        todo.description = Some(read_stdin_all()?);
     }
     if let Some(location) = args.location {
         todo.location = Some(location);
@@ -466,9 +481,13 @@ fn update_status(ids: Vec<i64>, status: Status, app: &mut AppStore, porcelain: b
     Ok(())
 }
 
-fn delete(ids: Vec<i64>, app: &mut AppStore, porcelain: bool) -> Result<()> {
+fn delete(ids: Vec<i64>, yes: bool, app: &mut AppStore, porcelain: bool) -> Result<()> {
     if ids.is_empty() {
         bail!("at least one id is required");
+    }
+    if !yes && !porcelain && !confirm("Do you want to delete those tasks?")? {
+        println!("aborted");
+        return Ok(());
     }
     for id in &ids {
         app.delete_by_id(*id)?;
@@ -599,6 +618,25 @@ fn repl_loop(config: &Config, app: &mut AppStore, porcelain: bool) -> Result<()>
         }
         println!("unsupported repl command: {}", input);
     }
+}
+
+fn read_stdin_all() -> Result<String> {
+    use std::io::Read;
+
+    let mut buffer = String::new();
+    std::io::stdin().read_to_string(&mut buffer)?;
+    Ok(buffer)
+}
+
+fn confirm(prompt: &str) -> Result<bool> {
+    use std::io::{self, Write};
+
+    print!("{} [y/N]: ", prompt);
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let value = input.trim().to_ascii_lowercase();
+    Ok(value == "y" || value == "yes")
 }
 
 fn parse_status_filter(raw: &str) -> Result<Vec<Status>> {
