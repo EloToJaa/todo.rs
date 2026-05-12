@@ -165,7 +165,6 @@ impl AppStore {
                 deleted += 1;
             }
         }
-        self.conn.execute("DELETE FROM todo_ids", [])?;
         Ok(deleted)
     }
 
@@ -224,9 +223,12 @@ fn parse_ics_file(path: &Path, list_name: &str) -> Result<Option<Todo>> {
         .get("UID")
         .cloned()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let summary = fields.get("SUMMARY").cloned().unwrap_or_default();
-    let description = fields.get("DESCRIPTION").cloned();
-    let location = fields.get("LOCATION").cloned();
+    let summary = fields
+        .get("SUMMARY")
+        .map(|value| unescape_ical_text(value))
+        .unwrap_or_default();
+    let description = fields.get("DESCRIPTION").map(|value| unescape_ical_text(value));
+    let location = fields.get("LOCATION").map(|value| unescape_ical_text(value));
     let due = fields.get("DUE").and_then(|v| parse_datetime(v));
     let start = fields.get("DTSTART").and_then(|v| parse_datetime(v));
     let status = fields
@@ -240,7 +242,7 @@ fn parse_ics_file(path: &Path, list_name: &str) -> Result<Option<Todo>> {
         .unwrap_or(if status == Status::Completed { 100 } else { 0 });
     let categories = fields
         .get("CATEGORIES")
-        .map(|value| value.split(',').map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect())
+        .map(|value| parse_ical_list(value))
         .unwrap_or_default();
 
     Ok(Some(Todo {
@@ -325,6 +327,66 @@ fn escape(value: &str) -> String {
         .replace('\n', "\\n")
         .replace(',', "\\,")
         .replace(';', "\\;")
+}
+
+fn unescape_ical_text(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        let Some(next) = chars.next() else {
+            out.push('\\');
+            break;
+        };
+        if next == 'n' || next == 'N' {
+            out.push('\n');
+            continue;
+        }
+        if next == '\\' || next == ';' || next == ',' {
+            out.push(next);
+            continue;
+        }
+        out.push(next);
+    }
+    out
+}
+
+fn parse_ical_list(value: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+    for ch in value.chars() {
+        if escaped {
+            current.push('\\');
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == ',' {
+            let item = unescape_ical_text(current.trim());
+            if !item.is_empty() {
+                items.push(item);
+            }
+            current.clear();
+            continue;
+        }
+        current.push(ch);
+    }
+    if escaped {
+        current.push('\\');
+    }
+    let item = unescape_ical_text(current.trim());
+    if !item.is_empty() {
+        items.push(item);
+    }
+    items
 }
 
 fn unfold_lines(raw: &str) -> Vec<String> {
@@ -460,5 +522,38 @@ mod tests {
         let todos = store.all_todos().expect("todos");
         assert_eq!(todos.len(), 1);
         assert_eq!(todos[0].1.summary, "Actual Task");
+    }
+
+    #[test]
+    fn unescapes_text_fields_from_ics() {
+        let temp = tempdir().expect("temp dir");
+        let list_dir = temp.path().join("home");
+        fs::create_dir_all(&list_dir).expect("list dir");
+
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:test-uid\r\nSUMMARY:Comma\\, Semi\\; Slash\\\\\r\nDESCRIPTION:Line 1\\nLine 2\r\nLOCATION:Office\\, 2nd floor\r\nSTATUS:NEEDS-ACTION\r\nCATEGORIES:ops\\,oncall,infra\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
+        fs::write(list_dir.join("task.ics"), ics).expect("write fixture");
+
+        let config = Config {
+            path_glob: format!("{}/*", temp.path().display()),
+            cache_path: temp.path().join("cache.sqlite3"),
+            default_list: None,
+            default_due_hours: 24,
+            date_format: "%Y-%m-%d".to_string(),
+            time_format: "%H:%M".to_string(),
+            dt_separator: " ".to_string(),
+            default_command: "list".to_string(),
+            color: "auto".to_string(),
+            humanize: false,
+            startable: false,
+        };
+
+        let mut store = AppStore::open(&config).expect("open store");
+        let todos = store.all_todos().expect("todos");
+        let todo = &todos[0].1;
+
+        assert_eq!(todo.summary, "Comma, Semi; Slash\\");
+        assert_eq!(todo.description.as_deref(), Some("Line 1\nLine 2"));
+        assert_eq!(todo.location.as_deref(), Some("Office, 2nd floor"));
+        assert_eq!(todo.categories, vec!["ops,oncall".to_string(), "infra".to_string()]);
     }
 }

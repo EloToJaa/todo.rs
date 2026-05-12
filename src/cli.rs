@@ -178,8 +178,8 @@ pub fn run(cli: Cli, config: &Config, app: &mut AppStore) -> Result<()> {
 }
 
 fn command_from_default(config: &Config) -> Command {
-    if config.default_command.trim() == "list" {
-        return Command::List(ListArgs {
+    let list = || {
+        Command::List(ListArgs {
             lists: Vec::new(),
             location: None,
             grep: None,
@@ -193,23 +193,26 @@ fn command_from_default(config: &Config) -> Command {
             startable: false,
             status: "NEEDS-ACTION,IN-PROCESS".to_string(),
             all: false,
-        });
+        })
+    };
+
+    let default = config.default_command.trim().to_ascii_lowercase();
+    if default.is_empty() {
+        return list();
     }
-    Command::List(ListArgs {
-        lists: Vec::new(),
-        location: None,
-        grep: None,
-        sort: None,
-        reverse: true,
-        no_reverse: false,
-        due: None,
-        category: Vec::new(),
-        priority: None,
-        start: None,
-        startable: false,
-        status: "NEEDS-ACTION,IN-PROCESS".to_string(),
-        all: false,
-    })
+    if default == "list" {
+        return list();
+    }
+    if default == "lists" {
+        return Command::Lists;
+    }
+    if default == "repl" {
+        return Command::Repl;
+    }
+    if default == "flush" {
+        return Command::Flush;
+    }
+    list()
 }
 
 fn list(args: ListArgs, config: &Config, app: &mut AppStore, porcelain: bool) -> Result<()> {
@@ -562,7 +565,13 @@ fn copy_todo(id: i64, list_name: &str, app: &mut AppStore, porcelain: bool) -> R
 
 fn edit_raw_file(path: &Path) -> Result<()> {
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-    let status = ProcessCommand::new(editor).arg(path).status()?;
+    let status = ProcessCommand::new("sh")
+        .arg("-c")
+        .arg("$1 \"$2\"")
+        .arg("sh")
+        .arg(&editor)
+        .arg(path)
+        .status()?;
     if status.success() {
         return Ok(());
     }
@@ -783,5 +792,40 @@ impl PorcelainTodo {
             list: todo.list_name.clone(),
             path: todo.path.display().to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{command_from_default, Command};
+    use crate::config::Config;
+    use std::path::PathBuf;
+
+    fn config_with_default(default_command: &str) -> Config {
+        Config {
+            path_glob: "~/.local/share/calendars/*".to_string(),
+            cache_path: PathBuf::from("/tmp/cache.sqlite3"),
+            default_list: None,
+            default_due_hours: 24,
+            date_format: "%Y-%m-%d".to_string(),
+            time_format: "%H:%M".to_string(),
+            dt_separator: " ".to_string(),
+            default_command: default_command.to_string(),
+            color: "auto".to_string(),
+            humanize: false,
+            startable: false,
+        }
+    }
+
+    #[test]
+    fn resolves_non_list_default_commands() {
+        let lists = command_from_default(&config_with_default("lists"));
+        assert!(matches!(lists, Command::Lists));
+
+        let repl = command_from_default(&config_with_default("repl"));
+        assert!(matches!(repl, Command::Repl));
+
+        let flush = command_from_default(&config_with_default("flush"));
+        assert!(matches!(flush, Command::Flush));
     }
 }
