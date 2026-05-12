@@ -70,7 +70,7 @@ impl AppStore {
                 }
             }
         }
-        items.sort_by(|a, b| a.0.cmp(&b.0));
+        items.sort_by_key(|item| item.0);
         Ok(items)
     }
 

@@ -271,22 +271,22 @@ fn list(args: ListArgs, config: &Config, app: &mut AppStore, porcelain: bool) ->
         let now = Local::now();
         todos.retain(|(_, todo)| todo.start.map(|start| start <= now).unwrap_or(true));
     }
-    if let Some(start_filter) = args.start {
-        if start_filter.len() == 2 {
-            let mode = start_filter[0].to_ascii_lowercase();
-            let dt = parse_user_datetime(&start_filter[1], config)?;
-            todos.retain(|(_, todo)| {
-                if let Some(start) = todo.start {
-                    if mode == "before" {
-                        return start <= dt;
-                    }
-                    if mode == "after" {
-                        return start >= dt;
-                    }
+    if let Some(start_filter) = args.start
+        && start_filter.len() == 2
+    {
+        let mode = start_filter[0].to_ascii_lowercase();
+        let dt = parse_user_datetime(&start_filter[1], config)?;
+        todos.retain(|(_, todo)| {
+            if let Some(start) = todo.start {
+                if mode == "before" {
+                    return start <= dt;
                 }
-                false
-            });
-        }
+                if mode == "after" {
+                    return start >= dt;
+                }
+            }
+            false
+        });
     }
 
     let reverse = if args.no_reverse { false } else { args.reverse };
@@ -619,11 +619,11 @@ fn repl_loop(config: &Config, app: &mut AppStore, porcelain: bool) -> Result<()>
             list_lists(app, porcelain)?;
             continue;
         }
-        if let Some(rest) = input.strip_prefix("show ") {
-            if let Ok(id) = rest.trim().parse::<i64>() {
-                show(id, config, app, porcelain)?;
-                continue;
-            }
+        if let Some(rest) = input.strip_prefix("show ")
+            && let Ok(id) = rest.trim().parse::<i64>()
+        {
+            show(id, config, app, porcelain)?;
+            continue;
         }
         println!("unsupported repl command: {}", input);
     }
@@ -678,10 +678,9 @@ fn parse_user_datetime(raw: &str, config: &Config) -> Result<chrono::DateTime<Lo
             "{}{}{}",
             config.date_format, config.dt_separator, config.time_format
         ),
-    ) {
-        if let Some(value) = naive.and_local_timezone(Local).single() {
-            return Ok(value);
-        }
+    ) && let Some(value) = naive.and_local_timezone(Local).single()
+    {
+        return Ok(value);
     }
     let naive = chrono::NaiveDate::parse_from_str(raw, &config.date_format)?;
     let with_time = naive

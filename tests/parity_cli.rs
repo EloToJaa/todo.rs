@@ -41,10 +41,6 @@ fn has_todoman() -> bool {
     output.status.success()
 }
 
-fn run_cmd(bin: &str, args: &[&str]) -> std::process::Output {
-    Command::new(bin).args(args).output().expect("run command")
-}
-
 fn run_with_config(bin: &str, config: &Path, args: &[&str]) -> std::process::Output {
     Command::new(bin)
         .arg("--config")
