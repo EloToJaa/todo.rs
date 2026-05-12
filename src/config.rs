@@ -1,7 +1,7 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
+use config::{Config as ConfigLoader, Environment, File};
 use serde::Deserialize;
 
 #[derive(Debug, Clone)]
@@ -42,14 +42,22 @@ impl Config {
             .or_else(|| std::env::var_os("TODOMAN_CONFIG").map(PathBuf::from))
             .unwrap_or_else(default_config_path);
 
-        let file_config = if config_path.exists() {
-            let raw = fs::read_to_string(&config_path)
-                .with_context(|| format!("failed reading config: {}", config_path.display()))?;
-            toml::from_str::<FileConfig>(&raw)
-                .with_context(|| format!("failed parsing config: {}", config_path.display()))?
-        } else {
-            FileConfig::default()
-        };
+        let builder = ConfigLoader::builder()
+            .set_default("path", "~/.local/share/calendars/*")?
+            .set_default("cache_path", "~/.cache/todors/cache.sqlite3")?
+            .set_default("default_due", 24)?
+            .set_default("date_format", "%Y-%m-%d")?
+            .set_default("time_format", "%H:%M")?
+            .set_default("dt_separator", " ")?
+            .set_default("default_command", "list")?
+            .set_default("color", "auto")?
+            .set_default("humanize", false)?
+            .set_default("startable", false)?
+            .add_source(File::from(config_path.clone()).required(false))
+            .add_source(Environment::with_prefix("TODORS").separator("__"));
+
+        let loaded = builder.build()?;
+        let file_config = loaded.try_deserialize::<FileConfig>()?;
 
         let path_glob = file_config
             .path

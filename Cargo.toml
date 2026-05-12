@@ -7,11 +7,11 @@ edition = "2024"
 anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }
 chrono = { version = "0.4.42", features = ["clock"] }
+config = { version = "0.15.12", default-features = false, features = ["toml"] }
 dirs = "6.0.0"
 glob = "0.3.3"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
-toml = "0.9.8"
 uuid = { version = "1.18.1", features = ["v4"] }
 serde_json = "1.0.145"
 
