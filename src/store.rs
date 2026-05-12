@@ -131,6 +131,13 @@ impl AppStore {
         let target_path = list
             .path
             .join(todo.path.file_name().and_then(|name| name.to_str()).unwrap_or("task.ics"));
+        if target_path.exists() {
+            bail!(
+                "cannot move todo {} to {}: destination already exists",
+                id,
+                target_path.display()
+            );
+        }
         fs::rename(&todo.path, &target_path)?;
         todo.path = target_path.clone();
         todo.list_name = list.name.clone();
