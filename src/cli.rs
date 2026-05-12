@@ -684,6 +684,9 @@ fn parse_status_filter(raw: &str) -> Result<Vec<Status>> {
             .ok_or_else(|| anyhow::anyhow!("invalid status token: {}", token))?;
         statuses.push(status);
     }
+    if statuses.is_empty() {
+        bail!("status filter cannot be empty");
+    }
     Ok(statuses)
 }
 
@@ -775,7 +778,7 @@ impl PorcelainTodo {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, command_from_default};
+    use super::{Command, command_from_default, parse_status_filter};
     use crate::config::Config;
     use std::path::PathBuf;
 
@@ -805,5 +808,11 @@ mod tests {
 
         let flush = command_from_default(&config_with_default("flush"));
         assert!(matches!(flush, Command::Flush));
+    }
+
+    #[test]
+    fn rejects_empty_status_filter() {
+        assert!(parse_status_filter("").is_err());
+        assert!(parse_status_filter(",  ,").is_err());
     }
 }
