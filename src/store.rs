@@ -42,9 +42,7 @@ impl AppStore {
     }
 
     pub fn list_by_name(&self, name: &str) -> Option<&TodoList> {
-        self.lists
-            .iter()
-            .find(|list| list.name.eq_ignore_ascii_case(name))
+        self.lists.iter().find(|list| list.name.eq_ignore_ascii_case(name))
     }
 
     pub fn all_todos(&mut self) -> Result<Vec<(i64, Todo)>> {
@@ -77,11 +75,9 @@ impl AppStore {
     pub fn todo_by_id(&mut self, id: i64) -> Result<Todo> {
         let (list_name, file_path): (String, String) = self
             .conn
-            .query_row(
-                "SELECT list_name, file_path FROM todo_ids WHERE id = ?1",
-                [id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
+            .query_row("SELECT list_name, file_path FROM todo_ids WHERE id = ?1", [id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .optional()?
             .ok_or_else(|| anyhow::anyhow!("todo id {} not found", id))?;
         let path = PathBuf::from(file_path);
@@ -114,11 +110,9 @@ impl AppStore {
     pub fn delete_by_id(&mut self, id: i64) -> Result<()> {
         let (list_name, file_path): (String, String) = self
             .conn
-            .query_row(
-                "SELECT list_name, file_path FROM todo_ids WHERE id = ?1",
-                [id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
+            .query_row("SELECT list_name, file_path FROM todo_ids WHERE id = ?1", [id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .optional()?
             .ok_or_else(|| anyhow::anyhow!("todo id {} not found", id))?;
         let path = PathBuf::from(file_path);
@@ -134,12 +128,9 @@ impl AppStore {
 
     pub fn move_to_list(&mut self, id: i64, list: &TodoList) -> Result<()> {
         let mut todo = self.todo_by_id(id)?;
-        let target_path = list.path.join(
-            todo.path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("task.ics"),
-        );
+        let target_path = list
+            .path
+            .join(todo.path.file_name().and_then(|name| name.to_str()).unwrap_or("task.ics"));
         fs::rename(&todo.path, &target_path)?;
         todo.path = target_path.clone();
         todo.list_name = list.name.clone();
@@ -220,35 +211,20 @@ fn parse_ics_file(path: &Path, list_name: &str) -> Result<Option<Todo>> {
         return Ok(None);
     }
 
-    let uid = fields
-        .get("UID")
-        .cloned()
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let summary = fields
-        .get("SUMMARY")
-        .map(|value| unescape_ical_text(value))
-        .unwrap_or_default();
-    let description = fields
-        .get("DESCRIPTION")
-        .map(|value| unescape_ical_text(value));
-    let location = fields
-        .get("LOCATION")
-        .map(|value| unescape_ical_text(value));
+    let uid = fields.get("UID").cloned().unwrap_or_else(|| Uuid::new_v4().to_string());
+    let summary = fields.get("SUMMARY").map(|value| unescape_ical_text(value)).unwrap_or_default();
+    let description = fields.get("DESCRIPTION").map(|value| unescape_ical_text(value));
+    let location = fields.get("LOCATION").map(|value| unescape_ical_text(value));
     let due = fields.get("DUE").and_then(|v| parse_datetime(v));
     let start = fields.get("DTSTART").and_then(|v| parse_datetime(v));
-    let status = fields
-        .get("STATUS")
-        .map(|v| Status::parse(v))
-        .unwrap_or(Status::NeedsAction);
+    let status = fields.get("STATUS").map(|v| Status::parse(v)).unwrap_or(Status::NeedsAction);
     let priority = fields.get("PRIORITY").and_then(|v| v.parse::<u8>().ok());
     let percent_complete = fields
         .get("PERCENT-COMPLETE")
         .and_then(|v| v.parse::<u8>().ok())
         .unwrap_or(if status == Status::Completed { 100 } else { 0 });
-    let categories = fields
-        .get("CATEGORIES")
-        .map(|value| parse_ical_list(value))
-        .unwrap_or_default();
+    let categories =
+        fields.get("CATEGORIES").map(|value| parse_ical_list(value)).unwrap_or_default();
 
     Ok(Some(Todo {
         uid,
@@ -287,16 +263,10 @@ fn write_ics_file(path: &Path, todo: &Todo) -> Result<()> {
         lines.push(format!("LOCATION:{}", escape(location)));
     }
     if let Some(due) = todo.due {
-        lines.push(format!(
-            "DUE:{}",
-            due.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")
-        ));
+        lines.push(format!("DUE:{}", due.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")));
     }
     if let Some(start) = todo.start {
-        lines.push(format!(
-            "DTSTART:{}",
-            start.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")
-        ));
+        lines.push(format!("DTSTART:{}", start.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")));
     }
     if let Some(priority) = todo.priority {
         lines.push(format!("PRIORITY:{}", priority));
@@ -333,11 +303,7 @@ fn parse_datetime(value: &str) -> Option<DateTime<Local>> {
 }
 
 fn escape(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('\n', "\\n")
-        .replace(',', "\\,")
-        .replace(';', "\\;")
+    value.replace('\\', "\\\\").replace('\n', "\\n").replace(',', "\\,").replace(';', "\\;")
 }
 
 fn unescape_ical_text(value: &str) -> String {
@@ -565,9 +531,6 @@ mod tests {
         assert_eq!(todo.summary, "Comma, Semi; Slash\\");
         assert_eq!(todo.description.as_deref(), Some("Line 1\nLine 2"));
         assert_eq!(todo.location.as_deref(), Some("Office, 2nd floor"));
-        assert_eq!(
-            todo.categories,
-            vec!["ops,oncall".to_string(), "infra".to_string()]
-        );
+        assert_eq!(todo.categories, vec!["ops,oncall".to_string(), "infra".to_string()]);
     }
 }
